@@ -1,1 +1,1 @@
-download folder and click on html file to play
+download folder and click on the html file to play
