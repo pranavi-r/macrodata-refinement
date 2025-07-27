@@ -97,24 +97,35 @@
             transform-origin: center;
         }
         
-        .number:hover {
-            color: #00ff88;
-            transform: scale(1.2);
+        .number.scary {
+            animation: jiggle 2s infinite;
+            color: #ff6b6b;
         }
         
-        .number.selected {
-            color: #00ff88;
+        @keyframes jiggle {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-2px); }
+            75% { transform: translateX(2px); }
+        }
+        
+        .number:hover {
             transform: scale(1.3);
-            text-shadow: 0 0 15px #00ff88;
+            z-index: 10;
+        }
+        
+        .number.scary:hover {
+            color: #ff0000;
+            text-shadow: 0 0 10px #ff0000;
+            animation: jiggle 0.3s infinite;
         }
         
         .number.dragging {
-            position: absolute;
+            position: fixed;
             z-index: 1000;
             pointer-events: none;
-            transform: scale(1.2);
-            color: #00ff88;
-            text-shadow: 0 0 20px #00ff88;
+            transform: scale(1.5);
+            text-shadow: 0 0 20px currentColor;
+            animation: none;
         }
         
         .number.correct {
@@ -156,32 +167,45 @@
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            cursor: pointer;
             transition: all 0.3s ease;
             position: relative;
+            overflow: hidden;
         }
         
-        .bin:hover {
-            border-color: #00d4ff;
-            background: rgba(0, 80, 160, 0.2);
+        .bin::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 0;
+            background: rgba(0, 255, 136, 0.2);
+            transition: height 0.3s ease;
         }
         
-        .bin.active {
+        .bin.open::before {
+            height: 100%;
+        }
+        
+        .bin.open {
             border-color: #00ff88;
-            background: rgba(0, 255, 136, 0.1);
-            box-shadow: 0 0 20px rgba(0, 255, 136, 0.2);
+            box-shadow: 0 0 20px rgba(0, 255, 136, 0.3);
         }
         
         .bin-label {
             font-size: 14px;
             color: #004080;
             margin-bottom: 8px;
+            position: relative;
+            z-index: 1;
         }
         
         .bin-percentage {
             font-size: 24px;
             font-weight: 700;
             color: #00d4ff;
+            position: relative;
+            z-index: 1;
         }
         
         .instructions {
@@ -256,14 +280,6 @@
         .hidden {
             display: none;
         }
-        
-        .selection-box {
-            position: absolute;
-            border: 2px dashed #00ff88;
-            background: rgba(0, 255, 136, 0.1);
-            pointer-events: none;
-            z-index: 500;
-        }
     </style>
 </head>
 <body>
@@ -306,12 +322,12 @@
         <div class="instructions" id="instructions">
             <h2>MACRODATA REFINEMENT</h2>
             <p>Welcome to Lumon Industries' Macrodata Refinement Division.</p>
-            <p>Your task is to categorize numbers into the appropriate bins based on their inherent qualities.</p>
+            <p>Your task is to identify and categorize numbers based on their inherent qualities.</p>
             <p><strong>Instructions:</strong></p>
-            <p>1. Click and drag to select numbers</p>
-            <p>2. Drag selected numbers to appropriate bins</p>
-            <p>3. Scroll over areas to magnify numbers</p>
-            <p>4. Work efficiently to maximize your quota</p>
+            <p>1. Move your mouse around to reveal numbers</p>
+            <p>2. Look for numbers that jiggle - these are "scary"</p>
+            <p>3. Click and drag scary numbers to the appropriate bin</p>
+            <p>4. The bin will open when the number is near</p>
             <button class="start-btn" onclick="startGame()">BEGIN REFINEMENT</button>
         </div>
         
@@ -327,16 +343,12 @@
         let gameState = {
             score: 0,
             timeLeft: 120,
-            selectedNumbers: [],
             gameActive: false,
             timer: null,
             numbers: [],
             binPercentages: [37, 50, 30, 70, 53],
-            isSelecting: false,
-            startX: 0,
-            startY: 0,
-            selectionBox: null,
-            isDragging: false
+            draggingNumber: null,
+            dragOffset: { x: 0, y: 0 }
         };
 
         function generateRandomNumbers() {
@@ -356,7 +368,6 @@
             grid.innerHTML = '';
             
             gameState.numbers = [];
-            gameState.selectedNumbers = [];
             const numberData = generateRandomNumbers();
             
             numberData.forEach((row, rowIndex) => {
@@ -367,6 +378,12 @@
                     numberEl.dataset.value = num;
                     numberEl.dataset.row = rowIndex;
                     numberEl.dataset.col = colIndex;
+                    
+                    const isScary = Math.random() < 0.15;
+                    if (isScary) {
+                        numberEl.classList.add('scary');
+                    }
+                    
                     grid.appendChild(numberEl);
                     
                     gameState.numbers.push({
@@ -374,7 +391,8 @@
                         row: rowIndex,
                         col: colIndex,
                         element: numberEl,
-                        used: false
+                        used: false,
+                        isScary: isScary
                     });
                 });
             });
@@ -385,20 +403,21 @@
         function setupEventListeners() {
             const grid = document.getElementById('numberGrid');
             
-            grid.addEventListener('wheel', handleScroll);
-            grid.addEventListener('mousedown', startSelection);
-            grid.addEventListener('mousemove', updateSelection);
-            grid.addEventListener('mouseup', endSelection);
+            grid.addEventListener('mousemove', handleMouseMove);
             
-            document.querySelectorAll('.bin').forEach(bin => {
-                bin.addEventListener('dragover', handleDragOver);
-                bin.addEventListener('drop', handleDrop);
-                bin.addEventListener('mouseup', handleBinClick);
+            gameState.numbers.forEach(num => {
+                if (num.isScary) {
+                    num.element.addEventListener('mousedown', startDragging);
+                }
             });
+            
+            document.addEventListener('mousemove', handleDragging);
+            document.addEventListener('mouseup', endDragging);
         }
 
-        function handleScroll(event) {
-            event.preventDefault();
+        function handleMouseMove(event) {
+            if (gameState.draggingNumber) return;
+            
             const rect = event.currentTarget.getBoundingClientRect();
             const x = event.clientX - rect.left;
             const y = event.clientY - rect.top;
@@ -410,181 +429,130 @@
             
             gameState.numbers.forEach(num => {
                 const distance = Math.sqrt(Math.pow(num.col - col, 2) + Math.pow(num.row - row, 2));
-                const scale = Math.max(1, 2 - distance * 0.3);
-                num.element.style.fontSize = `${28 * scale}px`;
-                num.element.style.zIndex = distance < 2 ? 100 : 1;
+                const scale = Math.max(0.8, 1.5 - distance * 0.2);
+                
+                if (distance < 3) {
+                    num.element.style.fontSize = `${28 * scale}px`;
+                    num.element.style.opacity = Math.max(0.5, 1 - distance * 0.1);
+                } else {
+                    num.element.style.fontSize = '28px';
+                    num.element.style.opacity = '0.3';
+                }
             });
         }
 
-        function startSelection(event) {
+        function startDragging(event) {
             if (!gameState.gameActive) return;
             
-            gameState.isSelecting = true;
-            gameState.startX = event.clientX;
-            gameState.startY = event.clientY;
+            const numberEl = event.target;
+            const num = gameState.numbers.find(n => n.element === numberEl);
             
-            const selectionBox = document.createElement('div');
-            selectionBox.className = 'selection-box';
-            selectionBox.style.left = event.clientX + 'px';
-            selectionBox.style.top = event.clientY + 'px';
-            selectionBox.style.width = '0px';
-            selectionBox.style.height = '0px';
-            document.body.appendChild(selectionBox);
-            gameState.selectionBox = selectionBox;
+            if (num && num.isScary && !num.used) {
+                gameState.draggingNumber = num;
+                
+                const rect = numberEl.getBoundingClientRect();
+                gameState.dragOffset.x = event.clientX - rect.left - rect.width / 2;
+                gameState.dragOffset.y = event.clientY - rect.top - rect.height / 2;
+                
+                numberEl.classList.add('dragging');
+                numberEl.style.left = (event.clientX - gameState.dragOffset.x) + 'px';
+                numberEl.style.top = (event.clientY - gameState.dragOffset.y) + 'px';
+            }
         }
 
-        function updateSelection(event) {
-            if (!gameState.isSelecting || !gameState.selectionBox) return;
+        function handleDragging(event) {
+            if (!gameState.draggingNumber) return;
             
-            const width = Math.abs(event.clientX - gameState.startX);
-            const height = Math.abs(event.clientY - gameState.startY);
-            const left = Math.min(event.clientX, gameState.startX);
-            const top = Math.min(event.clientY, gameState.startY);
+            const numberEl = gameState.draggingNumber.element;
+            numberEl.style.left = (event.clientX - gameState.dragOffset.x) + 'px';
+            numberEl.style.top = (event.clientY - gameState.dragOffset.y) + 'px';
             
-            gameState.selectionBox.style.left = left + 'px';
-            gameState.selectionBox.style.top = top + 'px';
-            gameState.selectionBox.style.width = width + 'px';
-            gameState.selectionBox.style.height = height + 'px';
-            
-            const selectionRect = {
-                left: left,
-                top: top,
-                right: left + width,
-                bottom: top + height
-            };
-            
-            gameState.numbers.forEach(num => {
-                const rect = num.element.getBoundingClientRect();
-                const isInSelection = rect.left < selectionRect.right && 
-                                    rect.right > selectionRect.left && 
-                                    rect.top < selectionRect.bottom && 
-                                    rect.bottom > selectionRect.top;
+            const bins = document.querySelectorAll('.bin');
+            bins.forEach(bin => {
+                const rect = bin.getBoundingClientRect();
+                const isNear = event.clientX >= rect.left - 50 && 
+                              event.clientX <= rect.right + 50 &&
+                              event.clientY >= rect.top - 50 && 
+                              event.clientY <= rect.bottom + 50;
                 
-                if (isInSelection && !num.used) {
-                    num.element.classList.add('selected');
-                    if (!gameState.selectedNumbers.includes(num)) {
-                        gameState.selectedNumbers.push(num);
-                    }
+                if (isNear) {
+                    bin.classList.add('open');
                 } else {
-                    num.element.classList.remove('selected');
-                    const index = gameState.selectedNumbers.indexOf(num);
-                    if (index > -1) {
-                        gameState.selectedNumbers.splice(index, 1);
-                    }
+                    bin.classList.remove('open');
                 }
             });
         }
 
-        function endSelection(event) {
-            gameState.isSelecting = false;
-            if (gameState.selectionBox) {
-                document.body.removeChild(gameState.selectionBox);
-                gameState.selectionBox = null;
-            }
+        function endDragging(event) {
+            if (!gameState.draggingNumber) return;
             
-            if (gameState.selectedNumbers.length > 0) {
-                gameState.isDragging = true;
-                document.addEventListener('mousemove', dragNumbers);
-                document.addEventListener('mouseup', stopDragging);
-            }
-        }
-
-        function dragNumbers(event) {
-            gameState.selectedNumbers.forEach(num => {
-                num.element.classList.add('dragging');
-            });
-        }
-
-        function stopDragging(event) {
-            gameState.isDragging = false;
-            document.removeEventListener('mousemove', dragNumbers);
-            document.removeEventListener('mouseup', stopDragging);
+            const bins = document.querySelectorAll('.bin');
+            let droppedInBin = false;
             
-            gameState.selectedNumbers.forEach(num => {
-                num.element.classList.remove('dragging');
-            });
-        }
-
-        function handleDragOver(event) {
-            event.preventDefault();
-        }
-
-        function handleDrop(event) {
-            event.preventDefault();
-            handleBinClick(event);
-        }
-
-        function handleBinClick(event) {
-            if (!gameState.gameActive || gameState.selectedNumbers.length === 0) return;
-            
-            const binIndex = parseInt(event.currentTarget.dataset.bin);
-            let correctCount = 0;
-            let totalCount = gameState.selectedNumbers.length;
-            
-            gameState.selectedNumbers.forEach(num => {
-                const isCorrect = checkNumberCategory(num.value, binIndex);
-                
-                if (isCorrect) {
-                    correctCount++;
-                    num.element.classList.add('correct');
-                    setTimeout(() => {
-                        num.element.style.opacity = '0.3';
-                        num.element.style.pointerEvents = 'none';
-                        num.used = true;
-                    }, 500);
-                } else {
-                    num.element.classList.add('incorrect');
+            bins.forEach(bin => {
+                const rect = bin.getBoundingClientRect();
+                if (event.clientX >= rect.left && event.clientX <= rect.right &&
+                    event.clientY >= rect.top && event.clientY <= rect.bottom) {
+                    processDrop(parseInt(bin.dataset.bin));
+                    droppedInBin = true;
                 }
+                bin.classList.remove('open');
+            });
+            
+            if (!droppedInBin) {
+                gameState.draggingNumber.element.classList.remove('dragging');
+                gameState.draggingNumber.element.style.position = '';
+                gameState.draggingNumber.element.style.left = '';
+                gameState.draggingNumber.element.style.top = '';
+            }
+            
+            gameState.draggingNumber = null;
+        }
+
+        function processDrop(binIndex) {
+            const num = gameState.draggingNumber;
+            const isCorrect = checkNumberCategory(num.value, binIndex);
+            
+            if (isCorrect) {
+                num.element.classList.add('correct');
+                gameState.score += 20;
+                updateBinPercentage(binIndex, 3);
                 
                 setTimeout(() => {
-                    num.element.classList.remove('selected', 'correct', 'incorrect');
-                }, 1000);
-            });
+                    num.element.style.display = 'none';
+                    num.used = true;
+                }, 500);
+            } else {
+                num.element.classList.add('incorrect');
+                gameState.score = Math.max(0, gameState.score - 10);
+                updateBinPercentage(binIndex, -2);
+                
+                setTimeout(() => {
+                    num.element.classList.remove('dragging', 'incorrect');
+                    num.element.style.position = '';
+                    num.element.style.left = '';
+                    num.element.style.top = '';
+                }, 500);
+            }
             
-            gameState.score += correctCount * 10;
-            gameState.score = Math.max(0, gameState.score - (totalCount - correctCount) * 5);
-            updateBinPercentage(binIndex, correctCount - (totalCount - correctCount));
             updateScore();
-            
-            gameState.selectedNumbers = [];
         }
 
         function checkNumberCategory(number, binIndex) {
             switch(binIndex) {
                 case 0:
-                    return (number % 4 === 0 && number !== 0) || isPrime(number);
+                    return number === 1 || number === 4 || number === 7;
                 case 1:
-                    return isPerfectSquare(number) || number.toString().includes('5');
+                    return number === 2 || number === 5 || number === 8;
                 case 2:
-                    return sumOfDigits(number) < 5 || (number >= 0 && number <= 2);
+                    return number === 0 || number === 3;
                 case 3:
-                    return number > 6 || hasRepeatingDigits(number);
+                    return number === 6 || number === 9;
                 case 4:
-                    return number % 3 === 0 || number.toString().includes('6');
+                    return number === 3 || number === 6 || number === 9;
                 default:
                     return false;
             }
-        }
-
-        function isPrime(n) {
-            if (n < 2) return false;
-            for (let i = 2; i <= Math.sqrt(n); i++) {
-                if (n % i === 0) return false;
-            }
-            return true;
-        }
-
-        function isPerfectSquare(n) {
-            return Math.sqrt(n) % 1 === 0;
-        }
-
-        function sumOfDigits(n) {
-            return n.toString().split('').reduce((sum, digit) => sum + parseInt(digit), 0);
-        }
-
-        function hasRepeatingDigits(n) {
-            const str = n.toString();
-            return str.length !== new Set(str).size;
         }
 
         function updateBinPercentage(binIndex, change) {
@@ -619,6 +587,21 @@
             gameState.timer = setInterval(() => {
                 gameState.timeLeft--;
                 updateTimer();
+                
+                if (gameState.timeLeft % 10 === 0) {
+                    gameState.numbers.forEach(num => {
+                        if (!num.used && Math.random() < 0.1) {
+                            num.isScary = !num.isScary;
+                            if (num.isScary) {
+                                num.element.classList.add('scary');
+                                num.element.addEventListener('mousedown', startDragging);
+                            } else {
+                                num.element.classList.remove('scary');
+                                num.element.removeEventListener('mousedown', startDragging);
+                            }
+                        }
+                    });
+                }
             }, 1000);
         }
 
@@ -635,7 +618,6 @@
             
             gameState.score = 0;
             gameState.timeLeft = 120;
-            gameState.selectedNumbers = [];
             gameState.binPercentages = [37, 50, 30, 70, 53];
             
             gameState.binPercentages.forEach((percentage, index) => {
